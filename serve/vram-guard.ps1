@@ -70,7 +70,11 @@ function Test-Busy {
     try {
         $s = Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/status') -TimeoutSec 5
         return [bool]($s.busy -or $s.queued)
-    } catch { return $false }
+    } catch {
+        # Status unreadable (e.g. 401 when an api_key is set, or a transient error).
+        # Be conservative: behave as if a task is running, never switch blindly.
+        return $true
+    }
 }
 
 function Free-Port {
@@ -172,9 +176,14 @@ while ($true) {
             }
             continue
         }
-        Log "taskul s-a terminat; aplic comutarea amanata in modul $pending"
-        $cfg = if ($pending -eq 'game') { $GameCfg } else { $FastCfg }
         $target = $pending
+        # The game may have appeared or closed while the task was running:
+        # re-check before applying, so we never switch to a stale mode.
+        $nowGames = @((Get-GameProcesses).Keys)
+        if ($target -eq 'game' -and $nowGames.Count -eq 0) { $target = 'fast' }
+        if ($target -eq 'fast' -and $nowGames.Count -gt 0)  { $target = 'game' }
+        Log "taskul s-a terminat; aplic comutarea in modul $target"
+        $cfg = if ($target -eq 'game') { $GameCfg } else { $FastCfg }
         $pending = $null
         $pendingSince = $null
         if (Switch-To $target $cfg) { $mode = $target }
