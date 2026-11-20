@@ -149,7 +149,7 @@ if ($null -ne $free -and $free -lt $FastToGameMs) {
     $ok = Start-Server $FastCfg
 }
 if (-not $ok) { Log "serverul nu a pornit; iesire."; exit 1 }
-Log "modelul NU e incarcat; se incarca la prima cerere si se descarca dupa 60 s de inactivitate."
+Log "modelul NU e incarcat; se incarca la prima cerere si se descarca dupa 20 s de inactivitate."
 
 $script:mode = $mode
 $pending = $null
