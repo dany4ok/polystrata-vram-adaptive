@@ -62,31 +62,50 @@ function Test-Busy {
     }
 }
 
-function Free-Port {
-    $owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
-    $stale = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+function Get-OurServerPids {
+    # Only servers started with OUR configs are ours to stop.
+    $mine = @()
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.ProcessId -ne $PID -and $_.CommandLine -and
         $_.CommandLine -like '*serve\server.py*' -and
-        $_.CommandLine -like '*Poly-strata*'
-    } | ForEach-Object { $_.ProcessId })
-    foreach ($procId in (@($owners + $stale) | Select-Object -Unique)) {
-        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
-        if ($p -and $p.Name -in @('python.exe','pythonw.exe')) {
-            Log "eliberez portul $Port / server orfan (PID $procId)"
-            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-        }
+        ($_.CommandLine -like "*$FastCfg*" -or $_.CommandLine -like "*$GameCfg*")
+    } | ForEach-Object { $mine += $_.ProcessId }
+    return $mine
+}
+
+function Get-OurEnginePids {
+    # Engines whose parent is one of our servers.
+    $servers = @(Get-OurServerPids)
+    $mine = @()
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -in @('strata-poly.exe','strata-vision.exe') -and
+        ($servers -contains $_.ParentProcessId)
+    } | ForEach-Object { $mine += $_.ProcessId }
+    return $mine
+}
+
+function Stop-PidIfOurs([int]$procId) {
+    if ($procId -le 0 -or $procId -eq $PID) { return }
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
+    if ($p -and $p.Name -in @('python.exe','pythonw.exe','strata-poly.exe','strata-vision.exe')) {
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
     }
-    Get-Process -Name 'strata-poly','strata-vision' -ErrorAction SilentlyContinue | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+}
+
+function Free-Port {
+    $owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
+    $stale = @(Get-OurServerPids) + @(Get-OurEnginePids)
+    foreach ($procId in (@($owners + $stale) | Select-Object -Unique)) {
+        Log "eliberez portul $Port / server orfan (PID $procId)"
+        Stop-PidIfOurs $procId
     }
     Start-Sleep -Seconds 2
 }
 
 function Stop-Server {
     $owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
-    foreach ($procId in ($owners | Select-Object -Unique)) { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue }
-    Get-Process -Name 'strata-poly','strata-vision' -ErrorAction SilentlyContinue | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    foreach ($procId in (@($owners + @(Get-OurServerPids) + @(Get-OurEnginePids)) | Select-Object -Unique)) {
+        Stop-PidIfOurs $procId
     }
     Start-Sleep -Seconds 2
 }
@@ -184,6 +203,17 @@ while ($true) {
             continue
         }
         $target = $pending
+        # Re-check VRAM: the situation may have changed while the task was running.
+        $nowFree = Get-FreeVramMib
+        if ($null -ne $nowFree) {
+            $right = $target
+            if ($nowFree -lt $FastToGameMs) { $right = 'game' }
+            elseif ($nowFree -gt $GameToFastMs) { $right = 'fast' }
+            if ($right -ne $target) {
+                Log "VRAM schimbata intre timp ($nowFree MiB): corectez $target -> $right"
+                $target = $right
+            }
+        }
         $pending = $null
         $pendingSince = $null
         Log "taskul s-a terminat; aplic comutarea in modul $target"

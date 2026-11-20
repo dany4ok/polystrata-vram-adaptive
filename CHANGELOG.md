@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.7 — 2026-11-20
+
+- Aligned `min_free_vram_mib` (5000 → 11000) with the guard's `FastToGameMs` threshold, removing the window where the server tried to load with too little VRAM.
+- A deferred switch now re-checks free VRAM before being applied, so a stale target is corrected.
+- Cleanup is scoped: only servers started with our configs and their child `strata-poly`/`strata-vision` processes are stopped; `Stop-Server` also verifies the process name.
+
 ## v1.0.6 — 2026-11-20
 
 - `--max-context` reduced 131072 → 65536 in both configs: smaller KV cache, less memory, faster load.

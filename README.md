@@ -42,7 +42,7 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 |---|---|---|
 | `lazy_load: true` | both configs | Server starts without the model; VRAM is free immediately |
 | `idle_unload_s: 20` | both configs | Model unloads 20 s after the last request, so the guard gets a clean VRAM reading quickly. The engine-presence check prevents false switches during loading |
-| `min_free_vram_mib: 5000` | review config | Safety net if a switch has not happened yet: refuse to load rather than starve the other app |
+| `min_free_vram_mib: 11000` | review config | Matches the guard's `FastToGameMs`: refuse to load while another app holds VRAM, instead of loading into too little and failing |
 | `--max-context: 65536` | both configs | Smaller KV cache (was 131072): less VRAM/RAM, faster load |
 | `conversation-cache-mib: 1024` | both configs | Small fixed cache instead of `auto` (which could park several GB of RAM) |
 | `fit_max_tokens: true` | both configs | Clamps OpenCode's `max_tokens=65536` to the room left by the 65536-token context instead of rejecting the request with 400 |
@@ -52,7 +52,8 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 | `GameToFastMs = 13000` | guard | Above this, the GPU is free again → fast mode |
 | `FastToGamePolls = 4` / `GameToFastPolls = 6` | guard | ~8 s / ~12 s hysteresis; avoids flapping |
 | Engine-presence guard | guard | While `strata-poly`/`strata-vision` exists (model loaded **or still loading**), the VRAM reading is ignored. `/health` says `loaded=false` during loading, which previously caused a false "another app owns VRAM" switch |
-| Deferred switching | guard | Uses `Test-Busy` + `$pending`; a running task is never interrupted |
+| Deferred switching | guard | Uses `Test-Busy` + `$pending`; a running task is never interrupted. VRAM is re-checked before applying, so a stale target is corrected |
+| Scoped cleanup | guard | Only servers started with our configs and their child engines are stopped; another PolyStrata instance is left alone |
 
 ## Adapting to another model
 
