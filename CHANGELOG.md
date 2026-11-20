@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.9 — 2026-11-20
+
+- `PollSeconds` 2 -> 1 with `FastToGamePolls` 4 -> 8 and `GameToFastPolls` 6 -> 12: same ~8 s / ~12 s switch timing, finer-grained detection.
+- One `/health` request per poll now supplies both server-up and model-loaded state (was two requests).
+- Log rotation: guard log and engine logs are archived to `.old-<timestamp>.log` when they exceed 5 MB.
+
 ## v1.0.8 — 2026-11-20
 
 - Orphaned engine processes are now cleaned up even when their parent server died: `Get-OurEnginePids` also matches our model-file tag.

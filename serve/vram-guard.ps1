@@ -1,10 +1,10 @@
 param(
     [int]$Port          = 8080,
-    [int]$PollSeconds   = 2,
+    [int]$PollSeconds   = 1,       # fine-grained polling; the poll counts below keep the timing
     [int]$FastToGameMs  = 11000,   # free VRAM below this -> another app needs the GPU
     [int]$GameToFastMs  = 13000,   # free VRAM above this -> GPU is free again
-    [int]$FastToGamePolls = 4,     # ~8 s of low VRAM before switching to RAM/SSD
-    [int]$GameToFastPolls = 6      # ~12 s of free VRAM before switching back to GPU
+    [int]$FastToGamePolls = 8,     # ~8 s of low VRAM before switching to RAM/SSD
+    [int]$GameToFastPolls = 12     # ~12 s of free VRAM before switching back to GPU
 )
 
 # VRAM-only adaptive guard.
@@ -25,7 +25,17 @@ $ServerPy = 'serve\server.py'
 $Log      = Join-Path $Root 'strata-adaptive-guard.log'
 $Base     = "http://127.0.0.1:$Port"
 
+function Rotate-Log([string]$path) {
+    try {
+        if ($path -and (Test-Path $path) -and (Get-Item $path).Length -gt 5MB) {
+            $bak = $path -replace '\.log$', ".old-$(Get-Date -Format yyyyMMdd-HHmmss).log"
+            Move-Item $path $bak -Force
+        }
+    } catch { }
+}
+
 function Log([string]$msg) {
+    Rotate-Log $Log
     $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
     Add-Content -Path $Log -Value $line -Encoding UTF8
     Write-Host $line
@@ -39,16 +49,14 @@ function Get-FreeVramMib {
     return $null
 }
 
-function Get-ServerUp {
-    try { Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/health') -TimeoutSec 5 | Out-Null; return $true }
-    catch { return $false }
-}
-
-function Get-ModelLoaded {
+function Get-Health {
+    # One request gives both "server up" and "model loaded".
     try {
         $h = Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/health') -TimeoutSec 5
-        return [bool]$h.loaded
-    } catch { return $false }
+        return [pscustomobject]@{ Up = $true; Loaded = [bool]$h.loaded }
+    } catch {
+        return [pscustomobject]@{ Up = $false; Loaded = $false }
+    }
 }
 
 function Test-Busy {
@@ -113,11 +121,12 @@ function Stop-Server {
 
 function Start-Server([string]$cfg) {
     Free-Port
+    try { $cfgObj = Get-Content $cfg -Raw | ConvertFrom-Json; Rotate-Log $cfgObj.log } catch { }
     $a = @($ServerPy, '--engine', 'strata', '--config', $cfg, '--port', "$Port")
     Start-Process -FilePath $Python -ArgumentList $a -WorkingDirectory $Root -NoNewWindow
     for ($i = 0; $i -lt 90; $i++) {
         Start-Sleep -Seconds 1
-        if (Get-ServerUp) {
+        if ((Get-Health).Up) {
             $mod = 'RAPID (GPU la cerere)'
             if ($cfg -eq $GameCfg) { $mod = 'JOC (RAM/SSD, 0 experti in VRAM)' }
             Log "serverul este gata: $mod"
@@ -181,7 +190,8 @@ $down = 0
 while ($true) {
     Start-Sleep -Seconds $PollSeconds
 
-    if (-not (Get-ServerUp)) {
+    $health = Get-Health
+    if (-not $health.Up) {
         $down++
         if ($down -ge 3) {
             Log "serverul nu raspunde; repornesc in modul $($script:mode)"
@@ -230,7 +240,7 @@ while ($true) {
         # free VRAM is not a valid signal. `/health` reports loaded=false during
         # the load, so also check the engine process before trusting the reading.
         $engineBusy = Get-Process -Name 'strata-poly','strata-vision' -ErrorAction SilentlyContinue
-        if ((Get-ModelLoaded) -or $engineBusy -or (Test-Busy)) { $lowCount = 0; continue }
+        if ($health.Loaded -or $engineBusy -or (Test-Busy)) { $lowCount = 0; continue }
         if ($free -lt $FastToGameMs) {
             $lowCount++
             if ($lowCount -ge $FastToGamePolls) {
