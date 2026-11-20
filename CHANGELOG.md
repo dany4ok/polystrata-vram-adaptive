@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.4 — 2026-11-20
+
+- **Idle unload set to 3 minutes (180 s)** in both configs (was 20 s): fewer cold starts, model stays ready longer.
+- **Fixed a false "another app owns VRAM" switch during model loading**: `/health` reports `loaded=false` while the engine is still starting, so the guard now also checks whether `strata-poly`/`strata-vision` exists before trusting a low VRAM reading. Previously, a low reading during loading caused an unnecessary switch to RAM/SSD mode right in the middle of a load.
+
 ## v1.0.3 — 2026-11-20
 
 Major redesign of mode detection.

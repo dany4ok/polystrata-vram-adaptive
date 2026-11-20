@@ -22,7 +22,7 @@
  "gpu": 0,
  "gpus_asked": true,
  "lazy_load": true,
- "idle_unload_s": 20,
+ "idle_unload_s": 180,
  "min_free_vram_mib": 5000,
  "vision": {
   "exe": "C:\\Users\\x1p\\Desktop\\Poly-strata\\engine-poly\\strata-vision.exe",

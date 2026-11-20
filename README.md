@@ -26,8 +26,8 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 |---|---|
 | `run-minicpmv-q4_k_m-auto.bat` | Launcher. Starts the guard in a visible console; **no browser**. Closing the window stops the server. |
 | `serve/vram-guard.ps1` | Guard: VRAM-only mode selection, config switching, stale-port cleanup, console status. |
-| `strata-minicpmv-q4_k_m-review.json` | Fast config: full GPU, `lazy_load`, `idle_unload_s=20`, `min_free_vram_mib=5000`. |
-| `strata-minicpmv-q4_k_m-cpu.json` | RAM/SSD config: `--no-gpu-experts`, `--vram-reserve-mib 13000`, `vision.gpu=false`, `lazy_load`, `idle_unload_s=20`. |
+| `strata-minicpmv-q4_k_m-review.json` | Fast config: full GPU, `lazy_load`, `idle_unload_s=180`, `min_free_vram_mib=5000`. |
+| `strata-minicpmv-q4_k_m-cpu.json` | RAM/SSD config: `--no-gpu-experts`, `--vram-reserve-mib 13000`, `vision.gpu=false`, `lazy_load`, `idle_unload_s=180`. |
 
 ## Installation
 
@@ -41,20 +41,21 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 | Setting | Value | Why |
 |---|---|---|
 | `lazy_load: true` | both configs | Server starts without the model; VRAM is free immediately |
-| `idle_unload_s: 20` | both configs | Model leaves VRAM quickly so the guard gets a clean VRAM reading |
+| `idle_unload_s: 180` | both configs | Model stays loaded for 3 minutes after the last request (fewer cold starts). The guard ignores VRAM while the engine is present, so this does not cause false mode switches |
 | `min_free_vram_mib: 5000` | review config | Safety net if a switch has not happened yet: refuse to load rather than starve the other app |
 | `--no-gpu-experts` | RAM/SSD config only | All 10 240 experts stay in RAM/SSD; 0 in VRAM |
 | `--vram-reserve-mib 13000` | RAM/SSD config only | Leaves ~13 GB VRAM for the other app |
 | `FastToGameMs = 11000` | guard | Below this, another app owns the GPU → RAM/SSD mode |
 | `GameToFastMs = 13000` | guard | Above this, the GPU is free again → fast mode |
 | `FastToGamePolls = 4` / `GameToFastPolls = 6` | guard | ~8 s / ~12 s hysteresis; avoids flapping |
+| Engine-presence guard | guard | While `strata-poly`/`strata-vision` exists (model loaded **or still loading**), the VRAM reading is ignored. `/health` says `loaded=false` during loading, which previously caused a false "another app owns VRAM" switch |
 | Deferred switching | guard | Uses `Test-Busy` + `$pending`; a running task is never interrupted |
 
 ## Adapting to another model
 
 1. Start from that model's working Poly-strata config.
-2. Make a `-review.json` copy and add `lazy_load: true`, `idle_unload_s: 20`, `min_free_vram_mib`.
-3. Make a `-cpu.json` copy and add `--no-gpu-experts`, `--vram-reserve-mib <almost all VRAM>`, `vision.gpu: false`, `lazy_load`, `idle_unload_s: 20`.
+2. Make a `-review.json` copy and add `lazy_load: true`, `idle_unload_s: 180`, `min_free_vram_mib`.
+3. Make a `-cpu.json` copy and add `--no-gpu-experts`, `--vram-reserve-mib <almost all VRAM>`, `vision.gpu: false`, `lazy_load`, `idle_unload_s: 180`.
 4. In `vram-guard.ps1`, point `$FastCfg` and `$GameCfg` at the new files.
 5. Adjust `FastToGameMs` / `GameToFastMs` for the card's total VRAM (roughly total minus the model's GPU footprint minus a safety margin).
 

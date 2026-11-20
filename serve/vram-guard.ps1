@@ -149,7 +149,7 @@ if ($null -ne $free -and $free -lt $FastToGameMs) {
     $ok = Start-Server $FastCfg
 }
 if (-not $ok) { Log "serverul nu a pornit; iesire."; exit 1 }
-Log "modelul NU e incarcat; se incarca la prima cerere si se descarca dupa 20 s de inactivitate."
+Log "modelul NU e incarcat; se incarca la prima cerere si se descarca dupa 180 s de inactivitate."
 
 $script:mode = $mode
 $pending = $null
@@ -195,9 +195,11 @@ while ($true) {
     if ($null -eq $free) { continue }
 
     if ($script:mode -eq 'fast') {
-        # While the model itself is loaded it uses ~12 GB, so free VRAM is not a
-        # valid signal. Also skip switching while a task is active.
-        if ((Get-ModelLoaded) -or (Test-Busy)) { $lowCount = 0; continue }
+        # While the model itself is loaded (or still loading) it uses ~12 GB, so
+        # free VRAM is not a valid signal. `/health` reports loaded=false during
+        # the load, so also check the engine process before trusting the reading.
+        $engineBusy = Get-Process -Name 'strata-poly','strata-vision' -ErrorAction SilentlyContinue
+        if ((Get-ModelLoaded) -or $engineBusy -or (Test-Busy)) { $lowCount = 0; continue }
         if ($free -lt $FastToGameMs) {
             $lowCount++
             if ($lowCount -ge $FastToGamePolls) {
