@@ -32,7 +32,10 @@ $NeverGame = @(
     'SearchApp.exe', 'SearchIndexer.exe', 'TextInputHost.exe', 'SystemSettings.exe',
     'WidgetBoard.exe', 'CrossDeviceResume.exe', 'WindowsTerminal.exe',
     'SnippingTool.exe', 'Photos.exe', 'RuntimeBroker.exe', 'Taskmgr.exe',
-    'NVIDIA Overlay.exe', 'nvcontainer.exe', 'NVDisplay.Container.exe',
+    'NVIDIA Overlay.exe', 'NVIDIA Share.exe', 'nvcontainer.exe',
+    'NvContainer.exe', 'NVDisplay.Container.exe', 'nvspcap64.exe',
+    # Windows / UWP background apps that show up in nvidia-smi but are not games
+    'PhoneExperienceHost.exe', 'YourPhone.exe', 'LockApp.exe', 'LogonUI.exe',
     'GameBar.exe', 'GameBarFTServer.exe', 'XboxGameBarWidgets.exe',
     'XboxGameBarWidget.exe', 'XboxGameBarWidget_.exe',
     'steam.exe', 'steamwebhelper.exe', 'OpenCode.exe', 'SiYuan.exe',
@@ -49,11 +52,28 @@ function Log([string]$msg) {
 function Get-GameProcesses {
     $raw = & nvidia-smi 2>$null | Out-String
     $re  = '^\|\s*\d+\s+\S+\s+\S+\s+(\d+)\s+(C\+G|C|G)\s+(.+?)\s+(N/A|\d+\s*MiB)\s*\|\s*$'
+    $winDir = ($env:WINDIR -replace '\\$','').ToLowerInvariant()
     $found = @{}
     foreach ($line in ($raw -split "`r?`n")) {
         if ($line -match $re) {
+            $procId = [int]$Matches[1]
             $name = (($Matches[3].Trim() -split '\\')[-1]).Trim()
-            if ($name -and $name -notin $NeverGame) { $found[$name] = [int]$Matches[1] }
+            if (-not $name -or $name -in $NeverGame) { continue }
+
+            # Generic guard against unknown Windows/system processes (e.g. UWP apps):
+            # a game is never an executable under C:\Windows or the NVIDIA driver folder.
+            $path = $null
+            try {
+                $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+                if ($proc) { $path = $proc.Path }
+            } catch { }
+            if ($path) {
+                $p = $path.ToLowerInvariant()
+                if ($p.StartsWith($winDir + '\') -or
+                    $p.StartsWith('c:\program files\nvidia corporation\') -or
+                    $p.StartsWith('c:\program files (x86)\nvidia corporation\')) { continue }
+            }
+            $found[$name] = $procId
         }
     }
     return $found
@@ -77,12 +97,26 @@ function Test-Busy {
     }
 }
 
+function Get-FreeVramMib {
+    try {
+        $v = & nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>$null
+        if ($v -match '(\d+)') { return [int]$Matches[1] }
+    } catch { }
+    return $null
+}
+
 function Free-Port {
     $owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
-    foreach ($procId in ($owners | Select-Object -Unique)) {
+    # Also catch orphan servers from earlier runs that no longer listen on the port.
+    $stale = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessId -ne $PID -and $_.CommandLine -and
+        $_.CommandLine -like '*serve\server.py*' -and
+        $_.CommandLine -like '*Poly-strata*'
+    } | ForEach-Object { $_.ProcessId })
+    foreach ($procId in (@($owners + $stale) | Select-Object -Unique)) {
         $p = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
         if ($p -and $p.Name -in @('python.exe','pythonw.exe')) {
-            Log "eliberez portul $Port (PID $procId ramas de la o rulare anterioara)"
+            Log "eliberez portul $Port / server orfan (PID $procId)"
             Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
         }
     }
@@ -147,6 +181,7 @@ if (-not $ok) { Log "serverul nu a pornit; iesire."; exit 1 }
 Log "modelul NU e incarcat acum; se va incarca la prima cerere si se va descarca dupa 60 s de inactivitate."
 
 $candidate = 0
+$vramCandidate = 0
 $down = 0
 $pending = $null          # 'game' or 'fast': a switch postponed until the current task ends
 $pendingSince = $null
@@ -217,6 +252,25 @@ while ($true) {
             elseif (Switch-To 'fast' $FastCfg) { $mode = 'fast' }
             $candidate = 0
         }
+    }
+    elseif ($mode -eq 'game' -and $gameNow) {
+        # Second signal: a "game" with almost all VRAM free is not really using the GPU.
+        # This self-corrects stale false detections (e.g. a Windows UWP process).
+        $free = Get-FreeVramMib
+        if ($null -ne $free -and $free -gt 10000) {
+            $vramCandidate++
+            if ($vramCandidate -ge ($PersistPolls * 3)) {
+                Log ("proces detectat dar VRAM-ul e liber ($free MiB) -> revin la mod rapid")
+                if (Test-Busy) {
+                    if (-not $pending) { Log "task in curs -> aman comutarea pana la terminare (nu opresc nimic)." }
+                    $pending = 'fast'
+                    $pendingSince = Get-Date
+                }
+                elseif (Switch-To 'fast' $FastCfg) { $mode = 'fast' }
+                $vramCandidate = 0
+            }
+        } else { $vramCandidate = 0 }
+        $candidate = 0
     }
     else { $candidate = 0 }
 }

@@ -44,7 +44,9 @@ The model does not need to be "always on". A cold start of about 15 seconds is a
 | `--vram-reserve-mib 13000` | game config only | Leaves ~13 GB VRAM for the game |
 | `PollSeconds=2`, `PersistPolls=2` | guard | Detection in ~4 s; filters out transient processes |
 | Deferred switching | guard | A config switch is **postponed until the current request finishes** — an in-flight task is never killed. A long task may temporarily slow the game; the switch is applied as soon as the server becomes idle |
-| `$NeverGame` | guard | GPU processes that are not games (Windows, Steam, Game Bar, browsers). Add any app here that causes a false switch. |
+| `$NeverGame` | guard | GPU processes that are not games (Windows, Steam, Game Bar, browsers, Phone Link). Add any app here that causes a false switch. |
+| System-path filter | guard | Any GPU process whose executable lives under `C:\Windows` or the NVIDIA driver folder is ignored, so unknown Windows/UWP apps cannot be mistaken for a game. |
+| VRAM sanity check | guard | In game mode, if more than 10 GB of VRAM stays free for ~12 s, the guard assumes there is no real game and switches back to fast mode. This self-corrects stale false detections. |
 
 ## Adapting it to another model
 

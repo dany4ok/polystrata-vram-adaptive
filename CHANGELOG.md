@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.1 — 2026-11-20
+
+Bug-fix release.
+
+- **Fixed false game detection** at startup: `PhoneExperienceHost.exe` (Windows Phone Link) and other Windows/NVIDIA background processes are now excluded from game detection.
+- **Added a system-path filter**: executables under `C:\Windows` or the NVIDIA driver folder can no longer be mistaken for a game.
+- **Added a VRAM sanity check**: in game mode, if more than 10 GB of VRAM stays free for ~12 s, the guard switches back to fast GPU mode on its own — even if a process is still (incorrectly) flagged as a game.
+- **Orphan cleanup**: leftover PolyStrata server processes that no longer listen on port 8080 are now removed on start.
+
 ## v1.0.0 — 2026-11-20
 
 First documented release of the on-demand adaptive VRAM setup for PolyStrata / MiniCPM-V 4.7.
