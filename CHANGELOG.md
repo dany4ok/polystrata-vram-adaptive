@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.8 — 2026-11-20
+
+- Orphaned engine processes are now cleaned up even when their parent server died: `Get-OurEnginePids` also matches our model-file tag.
+
 ## v1.0.7 — 2026-11-20
 
 - Aligned `min_free_vram_mib` (5000 → 11000) with the guard's `FastToGameMs` threshold, removing the window where the server tried to load with too little VRAM.

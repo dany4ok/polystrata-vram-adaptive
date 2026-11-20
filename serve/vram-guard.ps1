@@ -74,12 +74,13 @@ function Get-OurServerPids {
 }
 
 function Get-OurEnginePids {
-    # Engines whose parent is one of our servers.
+    # Engines of our servers, plus orphans whose parent died unexpectedly.
+    # The model-file tag identifies our engines even when the parent is gone.
     $servers = @(Get-OurServerPids)
     $mine = @()
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.Name -in @('strata-poly.exe','strata-vision.exe') -and
-        ($servers -contains $_.ParentProcessId)
+        (($servers -contains $_.ParentProcessId) -or ($_.CommandLine -like '*minicpmv-Q4_K_M.gguf*'))
     } | ForEach-Object { $mine += $_.ProcessId }
     return $mine
 }

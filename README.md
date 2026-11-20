@@ -53,7 +53,7 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 | `FastToGamePolls = 4` / `GameToFastPolls = 6` | guard | ~8 s / ~12 s hysteresis; avoids flapping |
 | Engine-presence guard | guard | While `strata-poly`/`strata-vision` exists (model loaded **or still loading**), the VRAM reading is ignored. `/health` says `loaded=false` during loading, which previously caused a false "another app owns VRAM" switch |
 | Deferred switching | guard | Uses `Test-Busy` + `$pending`; a running task is never interrupted. VRAM is re-checked before applying, so a stale target is corrected |
-| Scoped cleanup | guard | Only servers started with our configs and their child engines are stopped; another PolyStrata instance is left alone |
+| Scoped cleanup | guard | Only servers started with our configs and their engines are stopped. Orphaned engines are still caught via the model-file tag, even if their parent died; another PolyStrata instance is left alone |
 
 ## Adapting to another model
 
