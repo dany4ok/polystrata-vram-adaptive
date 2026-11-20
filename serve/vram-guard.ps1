@@ -65,16 +65,12 @@ function Get-ServerUp {
     catch { return $false }
 }
 
-function Wait-Idle([int]$maxSeconds) {
-    for ($i = 0; $i -lt $maxSeconds; $i++) {
-        try {
-            $s = Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/status') -TimeoutSec 5
-            if (-not $s.busy -and -not $s.queued) { return $true }
-        } catch { return $true }
-        Start-Sleep -Seconds 1
-    }
-    Log "serverul e inca ocupat; comut fortat"
-    return $false
+function Test-Busy {
+    # A running or queued request must never be killed by a config switch.
+    try {
+        $s = Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/status') -TimeoutSec 5
+        return [bool]($s.busy -or $s.queued)
+    } catch { return $false }
 }
 
 function Free-Port {
@@ -119,8 +115,6 @@ function Start-Server([string]$cfg) {
 
 function Switch-To([string]$newMode, [string]$cfg) {
     $previous = $mode
-    Log ("trecere in modul $newMode (se asteapta cererile in curs) ...")
-    Wait-Idle 5 | Out-Null
     Log "trecere in modul $newMode"
     Stop-Server
     if (Start-Server $cfg) {
@@ -150,6 +144,8 @@ Log "modelul NU e incarcat acum; se va incarca la prima cerere si se va descarca
 
 $candidate = 0
 $down = 0
+$pending = $null          # 'game' or 'fast': a switch postponed until the current task ends
+$pendingSince = $null
 
 while ($true) {
     Start-Sleep -Seconds $PollSeconds
@@ -167,6 +163,23 @@ while ($true) {
     }
     $down = 0
 
+    # Never interrupt a running task: apply a postponed switch only once idle.
+    if ($pending) {
+        if (Test-Busy) {
+            if ($pendingSince -and ((Get-Date) - $pendingSince).TotalSeconds -gt 600) {
+                Log "taskul dureaza >10 min; comutarea ramane amanata (nu intrerup nimic)."
+                $pendingSince = Get-Date
+            }
+            continue
+        }
+        Log "taskul s-a terminat; aplic comutarea amanata in modul $pending"
+        $cfg = if ($pending -eq 'game') { $GameCfg } else { $FastCfg }
+        $target = $pending
+        $pending = $null
+        $pendingSince = $null
+        if (Switch-To $target $cfg) { $mode = $target }
+    }
+
     $games = @((Get-GameProcesses).Keys)
     $gameNow = $games.Count -gt 0
 
@@ -174,7 +187,12 @@ while ($true) {
         $candidate++
         if ($candidate -ge $PersistPolls) {
             Log ("joc detectat: " + ($games -join ', '))
-            if (Switch-To 'game' $GameCfg) { $mode = 'game' }
+            if (Test-Busy) {
+                if (-not $pending) { Log "task in curs -> aman comutarea pana la terminare (nu opresc nimic)." }
+                $pending = 'game'
+                $pendingSince = Get-Date
+            }
+            elseif (Switch-To 'game' $GameCfg) { $mode = 'game' }
             $candidate = 0
         }
     }
@@ -182,7 +200,12 @@ while ($true) {
         $candidate++
         if ($candidate -ge $PersistPolls) {
             Log "jocul s-a inchis."
-            if (Switch-To 'fast' $FastCfg) { $mode = 'fast' }
+            if (Test-Busy) {
+                if (-not $pending) { Log "task in curs -> aman comutarea pana la terminare (nu opresc nimic)." }
+                $pending = 'fast'
+                $pendingSince = Get-Date
+            }
+            elseif (Switch-To 'fast' $FastCfg) { $mode = 'fast' }
             $candidate = 0
         }
     }

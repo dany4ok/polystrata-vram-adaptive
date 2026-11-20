@@ -14,7 +14,7 @@ The model does not need to be "always on". A cold start of about 15 seconds is a
 |---|---|---|
 | Startup, no game | `strata-minicpmv-q4_k_m-review.json` | Server is up in ~5 s, **model is not loaded**, ~14.8 GB VRAM free |
 | A request arrives | same config | Model loads into VRAM, answers, then unloads after 60 s of inactivity |
-| Game detected (~4 s) | `strata-minicpmv-q4_k_m-cpu.json` | Server restarts with **0 experts in VRAM**; ~13 GB VRAM reserved for the game; model still answers in ~1–2 s from RAM/SSD |
+| Game detected (~4 s) | `strata-minicpmv-q4_k_m-cpu.json` | **If a task is running, the switch is deferred until it finishes** (nothing is interrupted). Then the server restarts with **0 experts in VRAM**; ~13 GB VRAM reserved for the game; model still answers in ~1–2 s from RAM/SSD |
 | Game closed | back to review config | Fast restart (the model is not loaded until the first request) |
 
 ## Files
@@ -43,7 +43,7 @@ The model does not need to be "always on". A cold start of about 15 seconds is a
 | `--no-gpu-experts` | game config only | All experts stay in RAM/SSD; 0 in VRAM |
 | `--vram-reserve-mib 13000` | game config only | Leaves ~13 GB VRAM for the game |
 | `PollSeconds=2`, `PersistPolls=2` | guard | Detection in ~4 s; filters out transient processes |
-| `Wait-Idle 5` | guard | Waits at most 5 s for an in-flight request before switching |
+| Deferred switching | guard | A config switch is **postponed until the current request finishes** — an in-flight task is never killed. A long task may temporarily slow the game; the switch is applied as soon as the server becomes idle |
 | `$NeverGame` | guard | GPU processes that are not games (Windows, Steam, Game Bar, browsers). Add any app here that causes a false switch. |
 
 ## Adapting it to another model
