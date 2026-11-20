@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.2 — 2026-11-20
+
+- **Fixed another false game detection**: `Code.exe` (VS Code) and other GPU-accelerated editors/IDEs are now excluded, so opening an editor no longer toggles between game and fast mode.
+- **Added a low-VRAM fallback**: when the model is not loaded and another GPU app (e.g. ComfyUI) leaves less than 6 GB free for ~8 s, the guard switches to RAM/SSD mode. Requests are answered instead of failing with `the GPU is in use by another program`.
+- Combined with the existing VRAM sanity check, the guard now adapts in both directions based on actual VRAM availability.
+
 ## v1.0.1 — 2026-11-20
 
 Bug-fix release.

@@ -39,6 +39,9 @@ $NeverGame = @(
     'GameBar.exe', 'GameBarFTServer.exe', 'XboxGameBarWidgets.exe',
     'XboxGameBarWidget.exe', 'XboxGameBarWidget_.exe',
     'steam.exe', 'steamwebhelper.exe', 'OpenCode.exe', 'SiYuan.exe',
+    # GPU-accelerated editors / dev tools are not games
+    'Code.exe', 'Code - Insiders.exe', 'VSCodium.exe', 'Windsurf.exe', 'Cursor.exe',
+    'devenv.exe', 'idea64.exe', 'pycharm64.exe', 'webstorm64.exe', 'AndroidStudio.exe',
     'msedge.exe', 'msedgewebview2.exe', 'chrome.exe', 'firefox.exe',
     'opera.exe', 'brave.exe', 'discord.exe', 'obs64.exe', 'vlc.exe', 'spotify.exe'
 )
@@ -83,6 +86,13 @@ function Get-ServerUp {
     # With lazy_load the server answers even while the model is not loaded.
     try { Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/health') -TimeoutSec 5 | Out-Null; return $true }
     catch { return $false }
+}
+
+function Get-ModelLoaded {
+    try {
+        $h = Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/health') -TimeoutSec 5
+        return [bool]$h.loaded
+    } catch { return $false }
 }
 
 function Test-Busy {
@@ -182,6 +192,7 @@ Log "modelul NU e incarcat acum; se va incarca la prima cerere si se va descarca
 
 $candidate = 0
 $vramCandidate = 0
+$lowVramCandidate = 0
 $down = 0
 $pending = $null          # 'game' or 'fast': a switch postponed until the current task ends
 $pendingSince = $null
@@ -239,6 +250,25 @@ while ($true) {
             elseif (Switch-To 'game' $GameCfg) { $mode = 'game' }
             $candidate = 0
         }
+    }
+    elseif ($mode -eq 'fast' -and -not $gameNow) {
+        # Another GPU app (e.g. ComfyUI) may hold VRAM without showing up as a game.
+        # If the model is not loaded and VRAM stays low, use RAM/SSD so requests still work.
+        $free = Get-FreeVramMib
+        if ($null -ne $free -and $free -lt 6000 -and -not (Get-ModelLoaded)) {
+            $lowVramCandidate++
+            if ($lowVramCandidate -ge ($PersistPolls * 2)) {
+                Log ("VRAM ocupata de alta aplicatie ($free MiB libere) -> trec in mod RAM/SSD")
+                if (Test-Busy) {
+                    if (-not $pending) { Log "task in curs -> aman comutarea pana la terminare (nu opresc nimic)." }
+                    $pending = 'game'
+                    $pendingSince = Get-Date
+                }
+                elseif (Switch-To 'game' $GameCfg) { $mode = 'game' }
+                $lowVramCandidate = 0
+            }
+        } else { $lowVramCandidate = 0 }
+        $candidate = 0
     }
     elseif ($mode -eq 'game' -and -not $gameNow) {
         $candidate++
