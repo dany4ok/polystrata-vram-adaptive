@@ -1,73 +1,73 @@
-# PolyStrata — adaptare VRAM „la cerere"
+# PolyStrata — on-demand adaptive VRAM setup
 
-Scripturi + configuri pentru un server local PolyStrata/llama.cpp care:
+Scripts and configs for a local PolyStrata / llama.cpp-style server that:
 
-- **nu ține modelul în VRAM când nu e folosit** (pornește gol, se descarcă singur după inactivitate);
-- **la primul review folosește toată puterea GPU-ului** (încărcare completă, fără `--no-gpu-experts`);
-- **când e deschis un joc, trece în RAM + SSD** (`--no-gpu-experts`), deci jocul păstrează VRAM-ul, iar modelul rămâne apelabil.
+- **does not keep the model in VRAM when it is not in use** (starts empty, unloads itself after inactivity);
+- **uses the full GPU when a review request arrives** (full load, no `--no-gpu-experts`);
+- **switches to RAM + SSD when a game is running** (`--no-gpu-experts`), so the game keeps its VRAM while the model stays callable.
 
-Nu e nevoie ca modelul să fie „tot timpul pornit". Clientul primește răspuns și după un cold-start de ~15 s.
+The model does not need to be "always on". A cold start of about 15 seconds is acceptable.
 
-## Stări
+## States
 
-| Situație | Config folosit | Ce se întâmplă |
+| Situation | Config in use | What happens |
 |---|---|---|
-| Pornire, fără joc | `strata-minicpmv-q4_k_m-review.json` | Serverul e sus în ~5 s, **modelul nu e încărcat**, VRAM ~14,8 GB liber |
-| Sosește o cerere | același | Modelul se încarcă în VRAM, răspunde, apoi se descarcă după 60 s de inactivitate |
-| Joc detectat (~4 s) | `strata-minicpmv-q4_k_m-cpu.json` | Serverul se repornește cu **0 experți în VRAM**; jocul are ~13 GB rezervați; modelul răspunde în ~1–2 s din RAM/SSD |
-| Joc închis | revine la configul de review | Repornire rapidă (modelul nu se încarcă până la prima cerere) |
+| Startup, no game | `strata-minicpmv-q4_k_m-review.json` | Server is up in ~5 s, **model is not loaded**, ~14.8 GB VRAM free |
+| A request arrives | same config | Model loads into VRAM, answers, then unloads after 60 s of inactivity |
+| Game detected (~4 s) | `strata-minicpmv-q4_k_m-cpu.json` | Server restarts with **0 experts in VRAM**; ~13 GB VRAM reserved for the game; model still answers in ~1–2 s from RAM/SSD |
+| Game closed | back to review config | Fast restart (the model is not loaded until the first request) |
 
-## Fișiere
+## Files
 
-| Fișier | Rol |
+| File | Role |
 |---|---|
-| `run-minicpmv-q4_k_m-auto.bat` | Launcher. Pornește paznicul în consolă vizibilă; **nu deschide browserul**. Închiderea ferestrei oprește și serverul. |
-| `serve/vram-guard.ps1` | Paznicul: detectează jocul prin `nvidia-smi`, comută configul, eliberează portul 8080, afișează statusul în consolă. |
-| `strata-minicpmv-q4_k_m-review.json` | Config „rapid": GPU complet, `lazy_load`, `idle_unload_s=60`, `min_free_vram_mib=5000`. |
-| `strata-minicpmv-q4_k_m-cpu.json` | Config „joc": `--no-gpu-experts`, `--vram-reserve-mib 13000`, `vision.gpu=false`, `lazy_load`, `idle_unload_s=60`. |
+| `run-minicpmv-q4_k_m-auto.bat` | Launcher. Starts the guard in a visible console; **does not open a browser**. Closing the window stops the server too. |
+| `serve/vram-guard.ps1` | Guard: detects games via `nvidia-smi`, switches configs, frees port 8080, prints status to the console. |
+| `strata-minicpmv-q4_k_m-review.json` | "Fast" config: full GPU, `lazy_load`, `idle_unload_s=60`, `min_free_vram_mib=5000`. |
+| `strata-minicpmv-q4_k_m-cpu.json` | "Game" config: `--no-gpu-experts`, `--vram-reserve-mib 13000`, `vision.gpu=false`, `lazy_load`, `idle_unload_s=60`. |
 
-## Instalare pe o altă mașină
+## Installation on another machine
 
-1. Copiază cele 4 fișiere în rădăcina instalării Poly-strata (păstrează `serve/vram-guard.ps1` în `serve\`).
-2. Editează căile absolute din ambele `.json` (`exe`, `model`, `mmproj`, `expert-profile`, `tokenizer`, `log`, `lib_dirs`) și din `.bat` (calea către Python și `serve\server.py`).
-3. Creează o scurtătură pe desktop către `.bat`.
-4. Nu modifica scriptul original `run-minicpmv-q4_k_m.bat` și nici configul lui — adaptarea e separată.
+1. Copy the four files into the root of the Poly-strata installation (keep `serve/vram-guard.ps1` inside `serve\`).
+2. Edit the absolute paths in both `.json` files (`exe`, `model`, `mmproj`, `expert-profile`, `tokenizer`, `log`, `lib_dirs`) and in the `.bat` (the path to Python and `serve\server.py`).
+3. Create a desktop shortcut pointing to the `.bat`.
+4. Do not modify the original `run-minicpmv-q4_k_m.bat` or its config — this adaptation is completely separate.
 
-## Setări care contează
+## Settings that matter
 
-| Setare | Valoare | De ce |
+| Setting | Value | Why |
 |---|---|---|
-| `lazy_load: true` | ambele configuri | Serverul pornește fără model; VRAM-ul e liber imediat |
-| `idle_unload_s: 60` | ambele configuri | După 60 s fără cereri, modelul iese din VRAM/RAM |
-| `min_free_vram_mib: 5000` | config review | Dacă detectarea jocului eșuează, refuză încărcarea în loc să sufoce jocul |
-| `--no-gpu-experts` | doar config joc | Toți experții rămân în RAM/SSD; 0 în VRAM |
-| `--vram-reserve-mib 13000` | doar config joc | Lasă ~13 GB VRAM pentru joc |
-| `PollSeconds=2`, `PersistPolls=2` | paznic | Detectare în ~4 s; filtrează procesele tranzitorii |
-| `Wait-Idle 5` | paznic | Așteaptă maximum 5 s ca o cerere în curs să se termine înainte de comutare |
-| `$NeverGame` | paznic | Procese GPU care nu sunt joc (Windows, Steam, Game Bar, browsere). Adaugă aici orice aplicație dă detectare falsă. |
+| `lazy_load: true` | both configs | Server starts without the model; VRAM is free immediately |
+| `idle_unload_s: 60` | both configs | After 60 s without requests, the model leaves VRAM/RAM |
+| `min_free_vram_mib: 5000` | review config | If game detection fails, refuse to load instead of starving the game |
+| `--no-gpu-experts` | game config only | All experts stay in RAM/SSD; 0 in VRAM |
+| `--vram-reserve-mib 13000` | game config only | Leaves ~13 GB VRAM for the game |
+| `PollSeconds=2`, `PersistPolls=2` | guard | Detection in ~4 s; filters out transient processes |
+| `Wait-Idle 5` | guard | Waits at most 5 s for an in-flight request before switching |
+| `$NeverGame` | guard | GPU processes that are not games (Windows, Steam, Game Bar, browsers). Add any app here that causes a false switch. |
 
-## Cum se adaptează la alt model
+## Adapting it to another model
 
-1. Pornește de la configul care funcționează deja pentru modelul ăla (cel original din Poly-strata).
-2. Copiază-l în `strata-<model>-review.json` și adaugă: `lazy_load: true`, `idle_unload_s: 60`, `min_free_vram_mib` (cu cât e mai mare jocul, cu atât mai mare valoarea).
-3. Copiază-l în `strata-<model>-cpu.json`, adaugă `--no-gpu-experts`, `--vram-reserve-mib <aproape toată VRAM>`, `vision.gpu: false`, `lazy_load`, `idle_unload_s`.
-4. În `vram-guard.ps1`, schimbă `$FastCfg` și `$GameCfg` cu noile fișiere.
-5. Verifică că engine-ul acceptă flag-urile (`--no-gpu-experts` există în `strata-poly --help`); unele motoare vechi nu le au.
-6. Reglează `$NeverGame` pentru procesele specifice mașinii.
+1. Start from the config that already works for that model (its original Poly-strata config).
+2. Copy it to `strata-<model>-review.json` and add: `lazy_load: true`, `idle_unload_s: 60`, `min_free_vram_mib` (the heavier your game, the higher this value).
+3. Copy it to `strata-<model>-cpu.json`, add `--no-gpu-experts`, `--vram-reserve-mib <almost all VRAM>`, `vision.gpu: false`, `lazy_load`, `idle_unload_s`.
+4. In `vram-guard.ps1`, change `$FastCfg` and `$GameCfg` to the new files.
+5. Confirm the engine accepts the flags (`--no-gpu-experts` is listed in `strata-poly --help`); older engines may not have them.
+6. Tune `$NeverGame` for the processes on your machine.
 
-> Observație: acest engine (**strata-poly**) nu are `-ngl`, `--vram-elastic` sau mod CPU pur. Nu se poate muta modelul „live" între VRAM și RAM; singura cale e repornirea serverului cu alt config. Paznicul face exact asta.
+> Note: this engine (**strata-poly**) has no `-ngl`, no `--vram-elastic`, and no pure-CPU mode. The model cannot be moved "live" between VRAM and RAM; the only way is to restart the server with a different config. That is exactly what the guard does.
 
-## Depanare
+## Troubleshooting
 
-- **`port 8080 is already in use`** — paznicul eliberează automat portul la fiecare pornire (`Free-Port`); dacă tot persistă, verifică manual procesele Python rămase.
-- **Jocul rămâne la 3 fps** — înseamnă că modelul e încă în VRAM. Verifică în log: trebuie să apară `trecere in modul joc` și în logul engine-ului `0 of 10240 routed experts in VRAM`.
-- **Detectare falsă** (ex. se comută când deschizi un browser) — adaugă numele procesului în `$NeverGame`.
-- **Răspuns gol la „salut"** — nu e o problemă a acestei adaptări. MiniCPM-V 4.7 e model reasoning: generează întâi un bloc `` și uneori emite tokenul de stop încă înăuntrul gândirii, fără răspuns final (issue #1053 în PolyStrata). Serverul are `reasoning_close_retry`, dar e opt-in. Un `max_tokens` mai mare sau `reasoning_effort: low` reduce problema. Nu am modificat nimic în această direcție.
+- **`port 8080 is already in use`** — the guard frees the port automatically on every start (`Free-Port`). If it persists, check for leftover Python processes manually.
+- **Game still at 3 fps** — the model is still in VRAM. Check the logs: you should see `trecere in modul joc` and, in the engine log, `0 of 10240 routed experts in VRAM`.
+- **False detection** (e.g. switching when you open a browser) — add that process name to `$NeverGame`.
+- **Empty answer to "hello"** — this is not caused by this adaptation. MiniCPM-V 4.7 is a reasoning model: it emits a `` block first and sometimes sends its stop token while still inside the thought, producing no final answer (issue #1053 in PolyStrata). The server has `reasoning_close_retry`, but it is opt-in. A larger `max_tokens` or `reasoning_effort: low` reduces the problem. Nothing was changed in this regard.
 
-## Ce nu a fost schimbat
+## What was NOT changed
 
-`run-minicpmv-q4_k_m.bat` original și `strata-minicpmv-q4_k_m.json` original rămân intacte. Adaptarea e complet separată și poate fi ștearsă fără să afecteze instalarea.
+The original `run-minicpmv-q4_k_m.bat` and `strata-minicpmv-q4_k_m.json` are untouched. The adaptation is fully separate and can be deleted without affecting the installation.
 
-## Verificare
+## Verification
 
-Fluxul a fost testat live: pornire cu model neîncărcat (VRAM ~14,8 GB liber), cerere care încarcă modelul la ~15,5 GB și răspunde, descărcare automată după 70 s inactiv, config de joc cu 0 experți în VRAM, ciclu închidere→redeschidere fără servere orfane. Review independent: ✓ Verified.
+The flow was tested live: startup with the model unloaded (~14.8 GB VRAM free), a request loading the model to ~15.5 GB and answering correctly, automatic unload after 70 s idle, the game config with 0 experts in VRAM, and a close → reopen cycle with no orphan servers. Independent review: ✓ Verified.
