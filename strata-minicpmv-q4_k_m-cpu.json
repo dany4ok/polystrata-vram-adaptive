@@ -1,0 +1,36 @@
+{
+ "exe": "C:\\Users\\x1p\\Desktop\\Poly-strata\\engine-poly\\strata-poly.exe",
+ "args": [
+  "--model",
+  "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\models\\minicpmv-Q4_K_M\\MiniCPM-V-4_7-35B-A3B-Q4_K_M.gguf",
+  "--no-gpu-experts",
+  "--vram-reserve-mib",
+  "13000",
+  "--max-context",
+  "131072",
+  "--expert-profile",
+  "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\packs\\minicpmv-q4_k_m\\expert-profile.txt",
+  "--conversation-cache-mib",
+  "auto"
+ ],
+ "cwd": "C:\\Users\\x1p\\Desktop\\Poly-strata",
+ "tokenizer": "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\packs\\minicpmv-q4_k_m\\tokenizer",
+ "model_name": "minicpm-v-4.7-35b-a3b-q4_k_m",
+ "display_name": "MiniCPM-V 4.7 35B-A3B Q4_K_M (RAM + SSD, 0 experti in VRAM)",
+ "log": "C:\\Users\\x1p\\Desktop\\Poly-strata\\strata-minicpmv-q4_k_m-cpu.log",
+ "lib_dirs": [
+  "C:\\Users\\x1p\\Desktop\\Poly-strata\\.venv\\Lib\\site-packages\\nvidia\\cu13\\bin\\x86_64"
+ ],
+ "port": 8080,
+ "gpu": 0,
+ "gpus_asked": true,
+ "lazy_load": true,
+ "idle_unload_s": 60,
+ "vision": {
+  "exe": "C:\\Users\\x1p\\Desktop\\Poly-strata\\engine-poly\\strata-vision.exe",
+  "mmproj": "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\models\\minicpmv-Q4_K_M\\mmproj-model-f16.gguf",
+  "model": "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\models\\minicpmv-Q4_K_M\\MiniCPM-V-4_7-35B-A3B-Q4_K_M.gguf",
+  "gpu": false,
+  "max_tokens": 1024
+ }
+}
