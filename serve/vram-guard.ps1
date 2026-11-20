@@ -1,14 +1,17 @@
 param(
-    [int]$Port        = 8080,
-    [int]$PollSeconds = 2,
-    [int]$PersistPolls = 2
+    [int]$Port          = 8080,
+    [int]$PollSeconds   = 2,
+    [int]$FastToGameMs  = 11000,   # free VRAM below this -> another app needs the GPU
+    [int]$GameToFastMs  = 13000,   # free VRAM above this -> GPU is free again
+    [int]$FastToGamePolls = 4,     # ~8 s of low VRAM before switching to RAM/SSD
+    [int]$GameToFastPolls = 6      # ~12 s of free VRAM before switching back to GPU
 )
 
-# On-demand adaptive VRAM guard.
-# No game  -> server with GPU config: model loads on first request at FULL speed,
-#            unloads by itself after 60 s idle. VRAM is free when nobody uses it.
-# Game     -> server with RAM/SSD config: 0 experts in VRAM, model still loads on
-#            request (~1.7 s) and never competes with the game for VRAM.
+# VRAM-only adaptive guard.
+# No process-name heuristics: the mode is decided by how much VRAM is actually free.
+#   free < 11 GB (and model not loaded) -> RAM/SSD mode, 0 experts in VRAM
+#   free > 13 GB                        -> fast GPU mode (model loads on request)
+# The gap between the thresholds prevents flapping.
 # Log + console: strata-adaptive-guard.log
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -22,68 +25,21 @@ $ServerPy = 'serve\server.py'
 $Log      = Join-Path $Root 'strata-adaptive-guard.log'
 $Base     = "http://127.0.0.1:$Port"
 
-# Never treat these as a game. Add your own here if you see a false switch.
-$NeverGame = @(
-    'strata-poly.exe', 'strata-vision.exe',
-    'python.exe', 'pythonw.exe',
-    'powershell.exe', 'pwsh.exe', 'cmd.exe', 'conhost.exe', 'nvidia-smi.exe',
-    'dwm.exe', 'explorer.exe', 'ShellHost.exe', 'ShellExperienceHost.exe',
-    'ApplicationFrameHost.exe', 'StartMenuExperienceHost.exe', 'SearchHost.exe',
-    'SearchApp.exe', 'SearchIndexer.exe', 'TextInputHost.exe', 'SystemSettings.exe',
-    'WidgetBoard.exe', 'CrossDeviceResume.exe', 'WindowsTerminal.exe',
-    'SnippingTool.exe', 'Photos.exe', 'RuntimeBroker.exe', 'Taskmgr.exe',
-    'NVIDIA Overlay.exe', 'NVIDIA Share.exe', 'nvcontainer.exe',
-    'NvContainer.exe', 'NVDisplay.Container.exe', 'nvspcap64.exe',
-    # Windows / UWP background apps that show up in nvidia-smi but are not games
-    'PhoneExperienceHost.exe', 'YourPhone.exe', 'LockApp.exe', 'LogonUI.exe',
-    'GameBar.exe', 'GameBarFTServer.exe', 'XboxGameBarWidgets.exe',
-    'XboxGameBarWidget.exe', 'XboxGameBarWidget_.exe',
-    'steam.exe', 'steamwebhelper.exe', 'OpenCode.exe', 'SiYuan.exe',
-    # GPU-accelerated editors / dev tools are not games
-    'Code.exe', 'Code - Insiders.exe', 'VSCodium.exe', 'Windsurf.exe', 'Cursor.exe',
-    'devenv.exe', 'idea64.exe', 'pycharm64.exe', 'webstorm64.exe', 'AndroidStudio.exe',
-    'msedge.exe', 'msedgewebview2.exe', 'chrome.exe', 'firefox.exe',
-    'opera.exe', 'brave.exe', 'discord.exe', 'obs64.exe', 'vlc.exe', 'spotify.exe'
-)
-
 function Log([string]$msg) {
     $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
     Add-Content -Path $Log -Value $line -Encoding UTF8
     Write-Host $line
 }
 
-function Get-GameProcesses {
-    $raw = & nvidia-smi 2>$null | Out-String
-    $re  = '^\|\s*\d+\s+\S+\s+\S+\s+(\d+)\s+(C\+G|C|G)\s+(.+?)\s+(N/A|\d+\s*MiB)\s*\|\s*$'
-    $winDir = ($env:WINDIR -replace '\\$','').ToLowerInvariant()
-    $found = @{}
-    foreach ($line in ($raw -split "`r?`n")) {
-        if ($line -match $re) {
-            $procId = [int]$Matches[1]
-            $name = (($Matches[3].Trim() -split '\\')[-1]).Trim()
-            if (-not $name -or $name -in $NeverGame) { continue }
-
-            # Generic guard against unknown Windows/system processes (e.g. UWP apps):
-            # a game is never an executable under C:\Windows or the NVIDIA driver folder.
-            $path = $null
-            try {
-                $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
-                if ($proc) { $path = $proc.Path }
-            } catch { }
-            if ($path) {
-                $p = $path.ToLowerInvariant()
-                if ($p.StartsWith($winDir + '\') -or
-                    $p.StartsWith('c:\program files\nvidia corporation\') -or
-                    $p.StartsWith('c:\program files (x86)\nvidia corporation\')) { continue }
-            }
-            $found[$name] = $procId
-        }
-    }
-    return $found
+function Get-FreeVramMib {
+    try {
+        $v = & nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>$null
+        if ($v -match '(\d+)') { return [int]$Matches[1] }
+    } catch { }
+    return $null
 }
 
 function Get-ServerUp {
-    # With lazy_load the server answers even while the model is not loaded.
     try { Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/health') -TimeoutSec 5 | Out-Null; return $true }
     catch { return $false }
 }
@@ -101,23 +57,13 @@ function Test-Busy {
         $s = Invoke-RestMethod -UseBasicParsing -Uri ($Base + '/status') -TimeoutSec 5
         return [bool]($s.busy -or $s.queued)
     } catch {
-        # Status unreadable (e.g. 401 when an api_key is set, or a transient error).
-        # Be conservative: behave as if a task is running, never switch blindly.
+        # Unreadable status: behave as if a task is running, never switch blindly.
         return $true
     }
 }
 
-function Get-FreeVramMib {
-    try {
-        $v = & nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>$null
-        if ($v -match '(\d+)') { return [int]$Matches[1] }
-    } catch { }
-    return $null
-}
-
 function Free-Port {
     $owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
-    # Also catch orphan servers from earlier runs that no longer listen on the port.
     $stale = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.ProcessId -ne $PID -and $_.CommandLine -and
         $_.CommandLine -like '*serve\server.py*' -and
@@ -161,8 +107,22 @@ function Start-Server([string]$cfg) {
     return $false
 }
 
+function Request-Switch([string]$target, [string]$why) {
+    if (Test-Busy) {
+        if (-not $script:pending) {
+            Log "$why -> task in curs, aman comutarea (nu opresc nimic)."
+            $script:pending = $target
+            $script:pendingSince = Get-Date
+        }
+        return
+    }
+    Log "$why -> trec in modul $target"
+    $cfg = if ($target -eq 'game') { $GameCfg } else { $FastCfg }
+    if (Switch-To $target $cfg) { $script:mode = $target }
+}
+
 function Switch-To([string]$newMode, [string]$cfg) {
-    $previous = $mode
+    $previous = $script:mode
     Log "trecere in modul $newMode"
     Stop-Server
     if (Start-Server $cfg) {
@@ -175,27 +135,28 @@ function Switch-To([string]$newMode, [string]$cfg) {
     return $false
 }
 
-Log "=== adaptive guard start (la cerere) ==="
+Log "=== adaptive guard start (doar VRAM, fara detectare de procese) ==="
 
-$games = @((Get-GameProcesses).Keys)
-if ($games.Count -gt 0) {
-    Log ("joc deja deschis (" + ($games -join ', ') + ") -> mod joc")
+# Decide initial mode from VRAM: a low reading means another app already owns the GPU.
+$free = Get-FreeVramMib
+if ($null -ne $free -and $free -lt $FastToGameMs) {
+    Log "VRAM ocupata la pornire ($free MiB libere) -> mod joc (RAM/SSD)"
     $mode = 'game'
     $ok = Start-Server $GameCfg
 } else {
-    Log "niciun joc la pornire -> mod rapid (la cerere)"
+    Log "VRAM libera la pornire ($free MiB) -> mod rapid (GPU la cerere)"
     $mode = 'fast'
     $ok = Start-Server $FastCfg
 }
 if (-not $ok) { Log "serverul nu a pornit; iesire."; exit 1 }
-Log "modelul NU e incarcat acum; se va incarca la prima cerere si se va descarca dupa 60 s de inactivitate."
+Log "modelul NU e incarcat; se incarca la prima cerere si se descarca dupa 60 s de inactivitate."
 
-$candidate = 0
-$vramCandidate = 0
-$lowVramCandidate = 0
-$down = 0
-$pending = $null          # 'game' or 'fast': a switch postponed until the current task ends
+$script:mode = $mode
+$pending = $null
 $pendingSince = $null
+$lowCount = 0
+$highCount = 0
+$down = 0
 
 while ($true) {
     Start-Sleep -Seconds $PollSeconds
@@ -203,9 +164,9 @@ while ($true) {
     if (-not (Get-ServerUp)) {
         $down++
         if ($down -ge 3) {
-            Log "serverul nu raspunde; repornesc in modul $mode"
+            Log "serverul nu raspunde; repornesc in modul $($script:mode)"
             Stop-Server
-            $cfg = if ($mode -eq 'game') { $GameCfg } else { $FastCfg }
+            $cfg = if ($script:mode -eq 'game') { $GameCfg } else { $FastCfg }
             if (-not (Start-Server $cfg)) { Log "repornire esuata; iesire."; break }
             $down = 0
         }
@@ -213,94 +174,46 @@ while ($true) {
     }
     $down = 0
 
-    # Never interrupt a running task: apply a postponed switch only once idle.
+    # Apply a postponed switch only when the current task has finished.
     if ($pending) {
         if (Test-Busy) {
             if ($pendingSince -and ((Get-Date) - $pendingSince).TotalSeconds -gt 600) {
-                Log "taskul dureaza >10 min; comutarea ramane amanata (nu intrerup nimic)."
+                Log "taskul dureaza >10 min; comutarea ramane amanata."
                 $pendingSince = Get-Date
             }
             continue
         }
         $target = $pending
-        # The game may have appeared or closed while the task was running:
-        # re-check before applying, so we never switch to a stale mode.
-        $nowGames = @((Get-GameProcesses).Keys)
-        if ($target -eq 'game' -and $nowGames.Count -eq 0) { $target = 'fast' }
-        if ($target -eq 'fast' -and $nowGames.Count -gt 0)  { $target = 'game' }
-        Log "taskul s-a terminat; aplic comutarea in modul $target"
-        $cfg = if ($target -eq 'game') { $GameCfg } else { $FastCfg }
         $pending = $null
         $pendingSince = $null
-        if (Switch-To $target $cfg) { $mode = $target }
+        Log "taskul s-a terminat; aplic comutarea in modul $target"
+        $cfg = if ($target -eq 'game') { $GameCfg } else { $FastCfg }
+        if (Switch-To $target $cfg) { $script:mode = $target }
     }
 
-    $games = @((Get-GameProcesses).Keys)
-    $gameNow = $games.Count -gt 0
+    $free = Get-FreeVramMib
+    if ($null -eq $free) { continue }
 
-    if ($mode -eq 'fast' -and $gameNow) {
-        $candidate++
-        if ($candidate -ge $PersistPolls) {
-            Log ("joc detectat: " + ($games -join ', '))
-            if (Test-Busy) {
-                if (-not $pending) { Log "task in curs -> aman comutarea pana la terminare (nu opresc nimic)." }
-                $pending = 'game'
-                $pendingSince = Get-Date
+    if ($script:mode -eq 'fast') {
+        # While the model itself is loaded it uses ~12 GB, so free VRAM is not a
+        # valid signal. Also skip switching while a task is active.
+        if ((Get-ModelLoaded) -or (Test-Busy)) { $lowCount = 0; continue }
+        if ($free -lt $FastToGameMs) {
+            $lowCount++
+            if ($lowCount -ge $FastToGamePolls) {
+                Request-Switch 'game' "VRAM ocupata de alta aplicatie ($free MiB libere)"
+                $lowCount = 0
             }
-            elseif (Switch-To 'game' $GameCfg) { $mode = 'game' }
-            $candidate = 0
-        }
+        } else { $lowCount = 0 }
     }
-    elseif ($mode -eq 'fast' -and -not $gameNow) {
-        # Another GPU app (e.g. ComfyUI) may hold VRAM without showing up as a game.
-        # If the model is not loaded and VRAM stays low, use RAM/SSD so requests still work.
-        $free = Get-FreeVramMib
-        if ($null -ne $free -and $free -lt 6000 -and -not (Get-ModelLoaded)) {
-            $lowVramCandidate++
-            if ($lowVramCandidate -ge ($PersistPolls * 2)) {
-                Log ("VRAM ocupata de alta aplicatie ($free MiB libere) -> trec in mod RAM/SSD")
-                if (Test-Busy) {
-                    if (-not $pending) { Log "task in curs -> aman comutarea pana la terminare (nu opresc nimic)." }
-                    $pending = 'game'
-                    $pendingSince = Get-Date
-                }
-                elseif (Switch-To 'game' $GameCfg) { $mode = 'game' }
-                $lowVramCandidate = 0
+    else {
+        # Game mode uses only ~3 GB VRAM, so a high reading means the GPU is free.
+        if ($free -gt $GameToFastMs) {
+            $highCount++
+            if ($highCount -ge $GameToFastPolls) {
+                Request-Switch 'fast' "VRAM libera din nou ($free MiB)"
+                $highCount = 0
             }
-        } else { $lowVramCandidate = 0 }
-        $candidate = 0
+        } else { $highCount = 0 }
     }
-    elseif ($mode -eq 'game' -and -not $gameNow) {
-        $candidate++
-        if ($candidate -ge $PersistPolls) {
-            Log "jocul s-a inchis."
-            if (Test-Busy) {
-                if (-not $pending) { Log "task in curs -> aman comutarea pana la terminare (nu opresc nimic)." }
-                $pending = 'fast'
-                $pendingSince = Get-Date
-            }
-            elseif (Switch-To 'fast' $FastCfg) { $mode = 'fast' }
-            $candidate = 0
-        }
-    }
-    elseif ($mode -eq 'game' -and $gameNow) {
-        # Second signal: a "game" with almost all VRAM free is not really using the GPU.
-        # This self-corrects stale false detections (e.g. a Windows UWP process).
-        $free = Get-FreeVramMib
-        if ($null -ne $free -and $free -gt 10000) {
-            $vramCandidate++
-            if ($vramCandidate -ge ($PersistPolls * 3)) {
-                Log ("proces detectat dar VRAM-ul e liber ($free MiB) -> revin la mod rapid")
-                if (Test-Busy) {
-                    if (-not $pending) { Log "task in curs -> aman comutarea pana la terminare (nu opresc nimic)." }
-                    $pending = 'fast'
-                    $pendingSince = Get-Date
-                }
-                elseif (Switch-To 'fast' $FastCfg) { $mode = 'fast' }
-                $vramCandidate = 0
-            }
-        } else { $vramCandidate = 0 }
-        $candidate = 0
-    }
-    else { $candidate = 0 }
 }

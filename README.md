@@ -2,75 +2,75 @@
 
 Scripts and configs for a local PolyStrata / llama.cpp-style server that:
 
-- **does not keep the model in VRAM when it is not in use** (starts empty, unloads itself after inactivity);
-- **uses the full GPU when a review request arrives** (full load, no `--no-gpu-experts`);
-- **switches to RAM + SSD when a game is running** (`--no-gpu-experts`), so the game keeps its VRAM while the model stays callable.
+- **does not keep the model in VRAM when it is not used** (`lazy_load`, short idle unload);
+- **uses the full GPU when a review request arrives** (no `--no-gpu-experts`);
+- **moves to RAM + SSD when another application actually needs VRAM** (games, ComfyUI, anything else) — decided from **free VRAM only**, not from process names.
 
-The model does not need to be "always on". A cold start of about 15 seconds is acceptable.
+No process-name heuristics: opening VS Code, a browser, or any GPU-accelerated app can no longer be mistaken for a game.
 
-## States
+## How the mode is chosen
 
-| Situation | Config in use | What happens |
+The guard reads `nvidia-smi --query-gpu=memory.free` every 2 seconds:
+
+| Free VRAM | Mode | Config |
 |---|---|---|
-| Startup, no game | `strata-minicpmv-q4_k_m-review.json` | Server is up in ~5 s, **model is not loaded**, ~14.8 GB VRAM free |
-| A request arrives | same config | Model loads into VRAM, answers, then unloads after 60 s of inactivity |
-| Game detected (~4 s) | `strata-minicpmv-q4_k_m-cpu.json` | **If a task is running, the switch is deferred until it finishes** (nothing is interrupted). Then the server restarts with **0 experts in VRAM**; ~13 GB VRAM reserved for the game; model still answers in ~1–2 s from RAM/SSD |
-| Game closed | back to review config | Fast restart (the model is not loaded until the first request) |
+| `< 11 GB` for ~8 s (and model not loaded) | RAM/SSD — 0 experts in VRAM | `strata-minicpmv-q4_k_m-cpu.json` |
+| `> 13 GB` for ~12 s | Fast GPU — full capacity on demand | `strata-minicpmv-q4_k_m-review.json` |
+| between 11 and 13 GB | keep the current mode | — |
+
+The 2 GB gap between thresholds prevents flapping. While the model itself is loaded in fast mode it occupies ~12 GB, so free VRAM is not a valid signal and the guard does not switch; the model unloads after 20 s idle and the measurement becomes meaningful again. A switch is always deferred while a request is running, so an in-flight task is never killed.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `run-minicpmv-q4_k_m-auto.bat` | Launcher. Starts the guard in a visible console; **does not open a browser**. Closing the window stops the server too. |
-| `serve/vram-guard.ps1` | Guard: detects games via `nvidia-smi`, switches configs, frees port 8080, prints status to the console. |
-| `strata-minicpmv-q4_k_m-review.json` | "Fast" config: full GPU, `lazy_load`, `idle_unload_s=60`, `min_free_vram_mib=5000`. |
-| `strata-minicpmv-q4_k_m-cpu.json` | "Game" config: `--no-gpu-experts`, `--vram-reserve-mib 13000`, `vision.gpu=false`, `lazy_load`, `idle_unload_s=60`. |
+| `run-minicpmv-q4_k_m-auto.bat` | Launcher. Starts the guard in a visible console; **no browser**. Closing the window stops the server. |
+| `serve/vram-guard.ps1` | Guard: VRAM-only mode selection, config switching, stale-port cleanup, console status. |
+| `strata-minicpmv-q4_k_m-review.json` | Fast config: full GPU, `lazy_load`, `idle_unload_s=20`, `min_free_vram_mib=5000`. |
+| `strata-minicpmv-q4_k_m-cpu.json` | RAM/SSD config: `--no-gpu-experts`, `--vram-reserve-mib 13000`, `vision.gpu=false`, `lazy_load`, `idle_unload_s=20`. |
 
-## Installation on another machine
+## Installation
 
-1. Copy the four files into the root of the Poly-strata installation (keep `serve/vram-guard.ps1` inside `serve\`).
-2. Edit the absolute paths in both `.json` files (`exe`, `model`, `mmproj`, `expert-profile`, `tokenizer`, `log`, `lib_dirs`) and in the `.bat` (the path to Python and `serve\server.py`).
-3. Create a desktop shortcut pointing to the `.bat`.
-4. Do not modify the original `run-minicpmv-q4_k_m.bat` or its config — this adaptation is completely separate.
+1. Copy the four files into the Poly-strata installation (keep `vram-guard.ps1` in `serve\`).
+2. Edit the absolute paths in both `.json` files (`exe`, `model`, `mmproj`, `expert-profile`, `tokenizer`, `log`, `lib_dirs`) and in the `.bat` (Python and `serve\server.py`).
+3. Create a desktop shortcut to the `.bat`.
+4. Leave the original `run-minicpmv-q4_k_m.bat` and its config untouched.
 
-## Settings that matter
+## Settings
 
 | Setting | Value | Why |
 |---|---|---|
 | `lazy_load: true` | both configs | Server starts without the model; VRAM is free immediately |
-| `idle_unload_s: 60` | both configs | After 60 s without requests, the model leaves VRAM/RAM |
-| `min_free_vram_mib: 5000` | review config | If game detection fails, refuse to load instead of starving the game |
-| `--no-gpu-experts` | game config only | All experts stay in RAM/SSD; 0 in VRAM |
-| `--vram-reserve-mib 13000` | game config only | Leaves ~13 GB VRAM for the game |
-| `PollSeconds=2`, `PersistPolls=2` | guard | Detection in ~4 s; filters out transient processes |
-| Deferred switching | guard | A config switch is **postponed until the current request finishes** — an in-flight task is never killed. A long task may temporarily slow the game; the switch is applied as soon as the server becomes idle |
-| `$NeverGame` | guard | GPU processes that are not games (Windows, Steam, Game Bar, browsers, Phone Link). Add any app here that causes a false switch. |
-| System-path filter | guard | Any GPU process whose executable lives under `C:\Windows` or the NVIDIA driver folder is ignored, so unknown Windows/UWP apps cannot be mistaken for a game. |
-| VRAM sanity check | guard | In game mode, if more than 10 GB of VRAM stays free for ~12 s, the guard assumes there is no real game and switches back to fast mode. This self-corrects stale false detections. |
-| Low-VRAM fallback | guard | In fast mode, if the model is not loaded and less than 6 GB of VRAM stays free for ~8 s (e.g. ComfyUI is running), the guard switches to RAM/SSD so requests still work instead of failing with a VRAM error. |
+| `idle_unload_s: 20` | both configs | Model leaves VRAM quickly so the guard gets a clean VRAM reading |
+| `min_free_vram_mib: 5000` | review config | Safety net if a switch has not happened yet: refuse to load rather than starve the other app |
+| `--no-gpu-experts` | RAM/SSD config only | All 10 240 experts stay in RAM/SSD; 0 in VRAM |
+| `--vram-reserve-mib 13000` | RAM/SSD config only | Leaves ~13 GB VRAM for the other app |
+| `FastToGameMs = 11000` | guard | Below this, another app owns the GPU → RAM/SSD mode |
+| `GameToFastMs = 13000` | guard | Above this, the GPU is free again → fast mode |
+| `FastToGamePolls = 4` / `GameToFastPolls = 6` | guard | ~8 s / ~12 s hysteresis; avoids flapping |
+| Deferred switching | guard | Uses `Test-Busy` + `$pending`; a running task is never interrupted |
 
-## Adapting it to another model
+## Adapting to another model
 
-1. Start from the config that already works for that model (its original Poly-strata config).
-2. Copy it to `strata-<model>-review.json` and add: `lazy_load: true`, `idle_unload_s: 60`, `min_free_vram_mib` (the heavier your game, the higher this value).
-3. Copy it to `strata-<model>-cpu.json`, add `--no-gpu-experts`, `--vram-reserve-mib <almost all VRAM>`, `vision.gpu: false`, `lazy_load`, `idle_unload_s`.
-4. In `vram-guard.ps1`, change `$FastCfg` and `$GameCfg` to the new files.
-5. Confirm the engine accepts the flags (`--no-gpu-experts` is listed in `strata-poly --help`); older engines may not have them.
-6. Tune `$NeverGame` for the processes on your machine.
+1. Start from that model's working Poly-strata config.
+2. Make a `-review.json` copy and add `lazy_load: true`, `idle_unload_s: 20`, `min_free_vram_mib`.
+3. Make a `-cpu.json` copy and add `--no-gpu-experts`, `--vram-reserve-mib <almost all VRAM>`, `vision.gpu: false`, `lazy_load`, `idle_unload_s: 20`.
+4. In `vram-guard.ps1`, point `$FastCfg` and `$GameCfg` at the new files.
+5. Adjust `FastToGameMs` / `GameToFastMs` for the card's total VRAM (roughly total minus the model's GPU footprint minus a safety margin).
 
-> Note: this engine (**strata-poly**) has no `-ngl`, no `--vram-elastic`, and no pure-CPU mode. The model cannot be moved "live" between VRAM and RAM; the only way is to restart the server with a different config. That is exactly what the guard does.
+> This engine (**strata-poly**) has no `-ngl`, no `--vram-elastic`, and no pure-CPU mode. Weights cannot be moved live between VRAM and RAM; mode changes require a server restart. The guard does that automatically.
 
 ## Troubleshooting
 
-- **`port 8080 is already in use`** — the guard frees the port automatically on every start (`Free-Port`). If it persists, check for leftover Python processes manually.
-- **Game still at 3 fps** — the model is still in VRAM. Check the logs: you should see `trecere in modul joc` and, in the engine log, `0 of 10240 routed experts in VRAM`.
-- **False detection** (e.g. switching when you open a browser) — add that process name to `$NeverGame`.
-- **Empty answer to "hello"** — this is not caused by this adaptation. MiniCPM-V 4.7 is a reasoning model: it emits a `` block first and sometimes sends its stop token while still inside the thought, producing no final answer (issue #1053 in PolyStrata). The server has `reasoning_close_retry`, but it is opt-in. A larger `max_tokens` or `reasoning_effort: low` reduces the problem. Nothing was changed in this regard.
+- **`port 8080 is already in use`** — `Free-Port` removes stale servers on every start.
+- **Other app still slow** — check the guard log for `trecere in modul joc` and the engine log for `0 of 10240 routed experts in VRAM`. If the app uses less than ~5 GB VRAM, the model legitimately fits alongside it.
+- **`the GPU is in use by another program`** — a request arrived during the ~8 s detection window; it will be retried and succeed after the switch. Lower `min_free_vram_mib` only if you accept a temporary VRAM squeeze.
+- **Empty answer to "hello"** — MiniCPM-V 4.7 is a reasoning model and sometimes ends its turn inside the `` block (PolyStrata issue #1053). `reasoning_close_retry` is opt-in; larger `max_tokens` or low effort helps. Unrelated to this adaptation.
 
 ## What was NOT changed
 
-The original `run-minicpmv-q4_k_m.bat` and `strata-minicpmv-q4_k_m.json` are untouched. The adaptation is fully separate and can be deleted without affecting the installation.
+The original `run-minicpmv-q4_k_m.bat` and `strata-minicpmv-q4_k_m.json` are untouched.
 
 ## Verification
 
-The flow was tested live: startup with the model unloaded (~14.8 GB VRAM free), a request loading the model to ~15.5 GB and answering correctly, automatic unload after 70 s idle, the game config with 0 experts in VRAM, and a close → reopen cycle with no orphan servers. Independent review: ✓ Verified.
+Tested live: startup with model unloaded, full-GPU load on request, auto-unload, RAM/SSD mode with 0 experts in VRAM, and bidirectional VRAM-driven switching. Independent review: ✓ Verified.

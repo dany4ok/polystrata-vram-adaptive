@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.3 — 2026-11-20
+
+Major redesign of mode detection.
+
+- **Removed all process-name / GPU-process heuristics.** The guard no longer looks at `nvidia-smi` process lists at all — no `$NeverGame` whitelist, no false "VS Code / Phone Link / browser is a game" detections.
+- **Mode is now decided only from free VRAM**, with hysteresis: `< 11 GB` for ~8 s → RAM/SSD mode; `> 13 GB` for ~12 s → fast GPU mode; between the two thresholds the current mode is kept.
+- While the model itself is loaded in fast mode, the VRAM reading is ignored (the model occupies ~12 GB); it unloads after 20 s idle so the next reading is meaningful.
+- `idle_unload_s` reduced from 60 to 20 in both configs so the guard gets a clean VRAM signal sooner.
+- Mode switches remain deferred while a request is running (`Test-Busy` + `$pending`), so no task is ever interrupted.
+
 ## v1.0.2 — 2026-11-20
 
 - **Fixed another false game detection**: `Code.exe` (VS Code) and other GPU-accelerated editors/IDEs are now excluded, so opening an editor no longer toggles between game and fast mode.
