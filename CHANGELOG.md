@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.6 — 2026-11-20
+
+- `--max-context` reduced 131072 → 65536 in both configs: smaller KV cache, less memory, faster load.
+- `--conversation-cache-mib` changed from `auto` to 1024: avoids parking several GB of RAM.
+- Added `fit_max_tokens: true` because with a 65536-token context, OpenCode sends `max_tokens=65536`; without this flag the server rejects the request with 400.
+
 ## v1.0.5 — 2026-11-20
 
 - Idle unload set back to 20 seconds in both configs (was 180 s): VRAM is released quickly after inactivity so the guard can react fast when a game opens.

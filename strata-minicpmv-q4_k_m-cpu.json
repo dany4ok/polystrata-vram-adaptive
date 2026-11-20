@@ -7,11 +7,11 @@
   "--vram-reserve-mib",
   "13000",
   "--max-context",
-  "131072",
+  "65536",
   "--expert-profile",
   "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\packs\\minicpmv-q4_k_m\\expert-profile.txt",
   "--conversation-cache-mib",
-  "auto"
+  "1024"
  ],
  "cwd": "C:\\Users\\x1p\\Desktop\\Poly-strata",
  "tokenizer": "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\packs\\minicpmv-q4_k_m\\tokenizer",
@@ -26,6 +26,7 @@
  "gpus_asked": true,
  "lazy_load": true,
  "idle_unload_s": 20,
+ "fit_max_tokens": true,
  "vision": {
   "exe": "C:\\Users\\x1p\\Desktop\\Poly-strata\\engine-poly\\strata-vision.exe",
   "mmproj": "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\models\\minicpmv-Q4_K_M\\mmproj-model-f16.gguf",

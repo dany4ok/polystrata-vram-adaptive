@@ -4,11 +4,11 @@
   "--model",
   "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\models\\minicpmv-Q4_K_M\\MiniCPM-V-4_7-35B-A3B-Q4_K_M.gguf",
   "--max-context",
-  "131072",
+  "65536",
   "--expert-profile",
   "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\packs\\minicpmv-q4_k_m\\expert-profile.txt",
   "--conversation-cache-mib",
-  "auto"
+  "1024"
  ],
  "cwd": "C:\\Users\\x1p\\Desktop\\Poly-strata",
  "tokenizer": "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\packs\\minicpmv-q4_k_m\\tokenizer",
@@ -24,6 +24,7 @@
  "lazy_load": true,
  "idle_unload_s": 20,
  "min_free_vram_mib": 5000,
+ "fit_max_tokens": true,
  "vision": {
   "exe": "C:\\Users\\x1p\\Desktop\\Poly-strata\\engine-poly\\strata-vision.exe",
   "mmproj": "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\models\\minicpmv-Q4_K_M\\mmproj-model-f16.gguf",

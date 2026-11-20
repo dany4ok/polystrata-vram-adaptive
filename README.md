@@ -43,6 +43,9 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 | `lazy_load: true` | both configs | Server starts without the model; VRAM is free immediately |
 | `idle_unload_s: 20` | both configs | Model unloads 20 s after the last request, so the guard gets a clean VRAM reading quickly. The engine-presence check prevents false switches during loading |
 | `min_free_vram_mib: 5000` | review config | Safety net if a switch has not happened yet: refuse to load rather than starve the other app |
+| `--max-context: 65536` | both configs | Smaller KV cache (was 131072): less VRAM/RAM, faster load |
+| `conversation-cache-mib: 1024` | both configs | Small fixed cache instead of `auto` (which could park several GB of RAM) |
+| `fit_max_tokens: true` | both configs | Clamps OpenCode's `max_tokens=65536` to the room left by the 65536-token context instead of rejecting the request with 400 |
 | `--no-gpu-experts` | RAM/SSD config only | All 10 240 experts stay in RAM/SSD; 0 in VRAM |
 | `--vram-reserve-mib 13000` | RAM/SSD config only | Leaves ~13 GB VRAM for the other app |
 | `FastToGameMs = 11000` | guard | Below this, another app owns the GPU → RAM/SSD mode |
