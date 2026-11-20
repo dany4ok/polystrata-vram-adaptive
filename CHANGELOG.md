@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.5 — 2026-11-20
+
+- Idle unload set back to 20 seconds in both configs (was 180 s): VRAM is released quickly after inactivity so the guard can react fast when a game opens.
+
 ## v1.0.4 — 2026-11-20
 
 - **Idle unload set to 3 minutes (180 s)** in both configs (was 20 s): fewer cold starts, model stays ready longer.
