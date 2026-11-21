@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.0 — 2026-11-21
+
+- **No idle timer in fast mode:** `idle_unload_s` 20 -> 0. The model loads on request and stays in VRAM until another application needs the memory.
+- **Minimum hot time:** new guard parameter `MinHotSeconds = 300`. VRAM pressure cannot move the model out during the first 5 minutes after a load; a running request refreshes the timer.
+- **Pressure detection without process names:** on Windows WDDM, `nvidia-smi` cannot report VRAM per process, so the fast config now reserves ~4 GB (`--vram-reserve-mib 4000`) and the guard watches for free VRAM dropping below `PressureFreeMib = 1500` while loaded (~8 s sustained). Normal idle free VRAM is ~2.4 GB, so there are no false alarms.
+- The RAM/SSD config keeps `idle_unload_s: 20` so free VRAM rises again and the guard can switch back to fast mode after the other app releases the GPU.
+- Launcher comments and README updated for the new criterion.
+
 ## v1.0.9 — 2026-11-20
 
 - `PollSeconds` 2 -> 1 with `FastToGamePolls` 4 -> 8 and `GameToFastPolls` 6 -> 12: same ~8 s / ~12 s switch timing, finer-grained detection.

@@ -2,23 +2,24 @@
 
 Scripts and configs for a local PolyStrata / llama.cpp-style server that:
 
-- **does not keep the model in VRAM when it is not used** (`lazy_load`, short idle unload);
-- **uses the full GPU when a review request arrives** (no `--no-gpu-experts`);
-- **moves to RAM + SSD when another application actually needs VRAM** (games, ComfyUI, anything else) — decided from **free VRAM only**, not from process names.
+- **loads the model into VRAM on the first request and keeps it hot** — there is no idle timer (`idle_unload_s: 0`);
+- **keeps it hot for at least 5 minutes** before VRAM pressure is allowed to move it out;
+- **moves to RAM + SSD when another application actually needs VRAM** (games, ComfyUI, anything else) — decided from **free VRAM only**, not from process names or a timer.
 
 No process-name heuristics: opening VS Code, a browser, or any GPU-accelerated app can no longer be mistaken for a game.
 
 ## How the mode is chosen
 
-The guard reads `nvidia-smi --query-gpu=memory.free` every 2 seconds:
+The guard reads `nvidia-smi --query-gpu=memory.free` every 1 second:
 
 | Free VRAM | Mode | Config |
 |---|---|---|
 | `< 11 GB` for ~8 s (and model not loaded) | RAM/SSD — 0 experts in VRAM | `strata-minicpmv-q4_k_m-cpu.json` |
 | `> 13 GB` for ~12 s | Fast GPU — full capacity on demand | `strata-minicpmv-q4_k_m-review.json` |
-| between 11 and 13 GB | keep the current mode | — |
+| model loaded, `< 1.5 GB` for ~8 s, hot ≥ 300 s | RAM/SSD — another app took the reserved headroom | `strata-minicpmv-q4_k_m-cpu.json` |
+| between the thresholds | keep the current mode | — |
 
-The 2 GB gap between thresholds prevents flapping. While the model itself is loaded in fast mode it occupies ~12 GB, so free VRAM is not a valid signal and the guard does not switch; the model unloads after 20 s idle and the measurement becomes meaningful again. A switch is always deferred while a request is running, so an in-flight task is never killed.
+The fast config reserves ~4 GB (`--vram-reserve-mib 4000`), so free VRAM stays a meaningful signal **even while the model is loaded**. On Windows WDDM, `nvidia-smi` cannot report VRAM per process (`Not available in WDDM driver model`), so the guard detects another app by the drop in free VRAM instead of by process names. During the first 300 s after a load, pressure is ignored — the model is guaranteed to stay hot for at least 5 minutes. The 2 GB gap between the unloaded thresholds prevents flapping. A switch is always deferred while a request is running, so an in-flight task is never killed.
 
 ## Files
 
@@ -26,7 +27,7 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 |---|---|
 | `run-minicpmv-q4_k_m-auto.bat` | Launcher. Starts the guard in a visible console; **no browser**. Closing the window stops the server. |
 | `serve/vram-guard.ps1` | Guard: VRAM-only mode selection, config switching, stale-port cleanup, console status. |
-| `strata-minicpmv-q4_k_m-review.json` | Fast config: full GPU, `lazy_load`, `idle_unload_s=20`, `min_free_vram_mib=5000`. |
+| `strata-minicpmv-q4_k_m-review.json` | Fast config: full GPU, `lazy_load`, `idle_unload_s=0`, `--vram-reserve-mib 4000`, `min_free_vram_mib=11000`. |
 | `strata-minicpmv-q4_k_m-cpu.json` | RAM/SSD config: `--no-gpu-experts`, `--vram-reserve-mib 13000`, `vision.gpu=false`, `lazy_load`, `idle_unload_s=20`. |
 
 ## Installation
@@ -41,7 +42,9 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 | Setting | Value | Why |
 |---|---|---|
 | `lazy_load: true` | both configs | Server starts without the model; VRAM is free immediately |
-| `idle_unload_s: 20` | both configs | Model unloads 20 s after the last request, so the guard gets a clean VRAM reading quickly. The engine-presence check prevents false switches during loading |
+| `idle_unload_s: 0` | fast config | No idle timer at all: the model stays loaded until another app needs the VRAM. This is the criterion that replaces the old 20 s timer |
+| `idle_unload_s: 20` | RAM/SSD config only | Kept so that after a game-mode request the small CPU model unloads and free VRAM rises enough to switch back to fast mode |
+| `--vram-reserve-mib 4000` | fast config | Leaves ~2.4 GB free in practice (the engine overshoots the reserve), giving the guard a headroom to detect another app |
 | `min_free_vram_mib: 11000` | review config | Matches the guard's `FastToGameMs`: refuse to load while another app holds VRAM, instead of loading into too little and failing |
 | `--max-context: 65536` | both configs | Smaller KV cache (was 131072): less VRAM/RAM, faster load |
 | `conversation-cache-mib: 1024` | both configs | Small fixed cache instead of `auto` (which could park several GB of RAM) |
@@ -51,7 +54,9 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 | `FastToGameMs = 11000` | guard | Below this, another app owns the GPU → RAM/SSD mode |
 | `GameToFastMs = 13000` | guard | Above this, the GPU is free again → fast mode |
 | `PollSeconds = 1`; `FastToGamePolls = 8` / `GameToFastPolls = 12` | guard | Fine-grained polling with the same ~8 s / ~12 s hysteresis; avoids flapping |
-| Engine-presence guard | guard | While `strata-poly`/`strata-vision` exists (model loaded **or still loading**), the VRAM reading is ignored. `/health` says `loaded=false` during loading, which previously caused a false "another app owns VRAM" switch |
+| `PressureFreeMib = 1500` | guard | With the model loaded, free VRAM below this (for ~8 s) means another app took the reserved headroom. Below the normal idle reading (~2.4 GB), so no false alarms |
+| `MinHotSeconds = 300` | guard | Pressure cannot unload the model in the first 5 minutes after a load; a running request also refreshes this timer |
+| Engine-presence guard | guard | While the engine is still **loading** (`/health` says `loaded=false`), no switch is made. Once loaded, the reserved headroom makes the VRAM reading valid |
 | Deferred switching | guard | Uses `Test-Busy` + `$pending`; a running task is never interrupted. VRAM is re-checked before applying, so a stale target is corrected |
 | Scoped cleanup | guard | Only servers started with our configs and their engines are stopped. Orphaned engines are still caught via the model-file tag, even if their parent died; another PolyStrata instance is left alone |
 | One health call | guard | A single `/health` request provides both server-up and model-loaded state |
@@ -60,17 +65,17 @@ The 2 GB gap between thresholds prevents flapping. While the model itself is loa
 ## Adapting to another model
 
 1. Start from that model's working Poly-strata config.
-2. Make a `-review.json` copy and add `lazy_load: true`, `idle_unload_s: 20`, `min_free_vram_mib`.
+2. Make a `-review.json` copy and add `lazy_load: true`, `idle_unload_s: 0`, `min_free_vram_mib`, and `--vram-reserve-mib <headroom>` (enough to leave ~2–3 GB free when loaded).
 3. Make a `-cpu.json` copy and add `--no-gpu-experts`, `--vram-reserve-mib <almost all VRAM>`, `vision.gpu: false`, `lazy_load`, `idle_unload_s: 20`.
 4. In `vram-guard.ps1`, point `$FastCfg` and `$GameCfg` at the new files.
-5. Adjust `FastToGameMs` / `GameToFastMs` for the card's total VRAM (roughly total minus the model's GPU footprint minus a safety margin).
+5. Adjust `FastToGameMs` / `GameToFastMs` for the card's total VRAM and `PressureFreeMib` to sit below the fast-mode idle free VRAM you measure.
 
 > This engine (**strata-poly**) has no `-ngl`, no `--vram-elastic`, and no pure-CPU mode. Weights cannot be moved live between VRAM and RAM; mode changes require a server restart. The guard does that automatically.
 
 ## Troubleshooting
 
 - **`port 8080 is already in use`** — `Free-Port` removes stale servers on every start.
-- **Other app still slow** — check the guard log for `trecere in modul joc` and the engine log for `0 of 10240 routed experts in VRAM`. If the app uses less than ~5 GB VRAM, the model legitimately fits alongside it.
+- **Other app still slow** — check the guard log for `VRAM luata de alta aplicatie` / `trecere in modul joc` and the engine log for `0 of 10240 routed experts in VRAM`. Remember the model is guaranteed hot for the first 5 minutes after a load; pressure is ignored during that window.
 - **`the GPU is in use by another program`** — a request arrived during the ~8 s detection window; it will be retried and succeed after the switch. Lower `min_free_vram_mib` only if you accept a temporary VRAM squeeze.
 - **Empty answer to "hello"** — MiniCPM-V 4.7 is a reasoning model and sometimes ends its turn inside the `` block (PolyStrata issue #1053). `reasoning_close_retry` is opt-in; larger `max_tokens` or low effort helps. Unrelated to this adaptation.
 
@@ -80,4 +85,4 @@ The original `run-minicpmv-q4_k_m.bat` and `strata-minicpmv-q4_k_m.json` are unt
 
 ## Verification
 
-Tested live: startup with model unloaded, full-GPU load on request, auto-unload, RAM/SSD mode with 0 experts in VRAM, and bidirectional VRAM-driven switching. Independent review: ✓ Verified.
+Tested live: startup with model unloaded, full-GPU load on request, model still loaded after 40 s idle (no timer), RAM/SSD mode with 0 experts in VRAM, and bidirectional VRAM-driven switching. A CUDA process allocating 1.6 GB while the model was loaded triggered the switch after ~8 s; with no pressure and an expired hot-time there was no false switch. Independent review: see the release notes.

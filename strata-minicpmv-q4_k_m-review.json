@@ -8,7 +8,9 @@
   "--expert-profile",
   "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\packs\\minicpmv-q4_k_m\\expert-profile.txt",
   "--conversation-cache-mib",
-  "1024"
+  "1024",
+  "--vram-reserve-mib",
+  "4000"
  ],
  "cwd": "C:\\Users\\x1p\\Desktop\\Poly-strata",
  "tokenizer": "C:\\Users\\x1p\\Desktop\\PolyStrata-data\\packs\\minicpmv-q4_k_m\\tokenizer",
@@ -22,7 +24,7 @@
  "gpu": 0,
  "gpus_asked": true,
  "lazy_load": true,
- "idle_unload_s": 20,
+ "idle_unload_s": 0,
  "min_free_vram_mib": 11000,
  "fit_max_tokens": true,
  "vision": {
