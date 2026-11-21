@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.1 — 2026-11-21
+
+- VRAM pressure now **overrides** the hot-time guarantee: the model is released ~5 s after pressure is detected, even if it was loaded moments ago. `MinHotSeconds` removed.
+- New `PressurePolls = 5` (was `FastToGamePolls = 8` for the loaded-model path): measured switch **5.1 s** after a 900 MiB CUDA allocation.
+- With no pressure there is no idle timer at all (`idle_unload_s: 0`), so the model stays in VRAM indefinitely.
+- A real game initially did not trigger a switch because the old 5-minute minimum was still in force; that gate is gone.
+
 ## v1.1.0 — 2026-11-21
 
 - **No idle timer in fast mode:** `idle_unload_s` 20 -> 0. The model loads on request and stays in VRAM until another application needs the memory.

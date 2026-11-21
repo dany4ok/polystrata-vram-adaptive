@@ -6,15 +6,18 @@ param(
     [int]$FastToGamePolls = 8,     # ~8 s of low VRAM before switching to RAM/SSD
     [int]$GameToFastPolls = 12,    # ~12 s of free VRAM before switching back to GPU
     [int]$PressureFreeMib = 1500,  # fast mode, model loaded: free below this = another app took the reserved headroom
-    [int]$MinHotSeconds  = 300     # never unload for VRAM pressure before the model has been hot this long
+    [int]$PressurePolls   = 5      # ~5 s of pressure -> release VRAM, overriding any hot-time guarantee
 )
 
 # VRAM-only adaptive guard.
 # No process-name heuristics and no idle timer in the fast config (idle_unload_s: 0):
 #   model unloaded + free < 11 GB  -> RAM/SSD mode, 0 experts in VRAM
 #   free > 13 GB                   -> fast GPU mode (model loads on request)
-#   model loaded + free < 1.5 GB   -> another app took the reserved headroom; after
-#                                    MinHotSeconds of hot time, switch to RAM/SSD
+#   model loaded + free < 1.5 GB   -> another app took the reserved headroom; switch
+#                                    to RAM/SSD after ~5 s, regardless of how long the
+#                                    model has been loaded (pressure overrides hot time)
+# With no pressure there is no idle timer at all (idle_unload_s: 0), so the model stays
+# in VRAM indefinitely (well beyond 5 minutes).
 # The fast config reserves ~4 GB of VRAM (--vram-reserve-mib 4000) so free VRAM stays
 # a meaningful signal while the model is loaded. The gap between thresholds avoids flapping.
 # Log + console: strata-adaptive-guard.log
@@ -183,12 +186,11 @@ if ($null -ne $free -and $free -lt $FastToGameMs) {
     $ok = Start-Server $FastCfg
 }
 if (-not $ok) { Log "serverul nu a pornit; iesire."; exit 1 }
-Log "modelul NU e incarcat; se incarca la prima cerere si ramane in VRAM pana cand alta aplicatie are nevoie de memorie (minim $MinHotSeconds s cald)."
+Log "modelul NU e incarcat; se incarca la prima cerere si ramane in VRAM cat timp nu e presiune. Daca alta aplicatie cere memorie, eliberez VRAM in ~$PressurePolls s."
 
 $script:mode = $mode
 $pending = $null
 $pendingSince = $null
-$loadedSince = $null
 $lowCount = 0
 $highCount = 0
 $down = 0
@@ -242,25 +244,19 @@ while ($true) {
     if ($null -eq $free) { continue }
 
     if ($script:mode -eq 'fast') {
-        # Never interrupt a running or queued request; it also counts as activity,
-        # so the minimum hot time is measured from the last real use.
-        if (Test-Busy) {
-            $lowCount = 0
-            if ($health.Loaded) { $loadedSince = Get-Date }
-            continue
-        }
+        # Never interrupt a running or queued request.
+        if (Test-Busy) { $lowCount = 0; continue }
 
         $engineBusy = Get-Process -Name 'strata-poly','strata-vision' -ErrorAction SilentlyContinue
         if ($health.Loaded -or $engineBusy) {
             if (-not $health.Loaded) { $lowCount = 0; continue }   # still loading
-            if (-not $loadedSince) { $loadedSince = Get-Date }
-            $hotFor = ((Get-Date) - $loadedSince).TotalSeconds
             # The fast config reserves headroom, so free VRAM is meaningful even
             # while loaded. A drop below the floor = another app took that memory.
-            if ($hotFor -ge $MinHotSeconds -and $free -lt $PressureFreeMib) {
+            # Pressure overrides hot time: no minimum wait before releasing VRAM.
+            if ($free -lt $PressureFreeMib) {
                 $lowCount++
-                if ($lowCount -ge $FastToGamePolls) {
-                    Request-Switch 'game' "VRAM luata de alta aplicatie ($free MiB libere, model cald $([int]$hotFor) s)"
+                if ($lowCount -ge $PressurePolls) {
+                    Request-Switch 'game' "VRAM luata de alta aplicatie ($free MiB libere)"
                     $lowCount = 0
                 }
             } else { $lowCount = 0 }
@@ -268,7 +264,6 @@ while ($true) {
         }
 
         # Model not loaded: the original free-VRAM criterion applies.
-        $loadedSince = $null
         if ($free -lt $FastToGameMs) {
             $lowCount++
             if ($lowCount -ge $FastToGamePolls) {
